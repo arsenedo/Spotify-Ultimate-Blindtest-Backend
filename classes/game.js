@@ -29,6 +29,16 @@ class Game {
     return false;
   }
 
+  removePlayer(player) {
+    const playerIdx = this.players.findIndex(p => p.id === player.id);
+
+    if(playerIdx === -1) return [];
+
+    this.players.splice(playerIdx, 1);
+
+    return this.players;
+  }
+
   arePlayersReady() {
     return this.players.filter((player) => !player.ready).length === 0;
   }
@@ -131,6 +141,10 @@ class Game {
     gameData.sort((a, b) => a.score - b.score).reverse();
 
     return gameData;
+  }
+
+  getPlayerNames() {
+    return this.players.map((item) => item.name);
   }
 }
 

@@ -18,25 +18,28 @@ spotify.getNewAuthToken();
 
 // WebSocket event handling
 wss.on("connection", (ws) => {
+  let player;
+  let game;
+
+  const response = {
+    code: "500",
+    msg: "internal server error",
+    data: {},
+  };
+
+  const updateResponse = (code, msg, data) => {
+    response.code = code;
+    response.msg = msg;
+    response.data = data;
+  };
+
   // Event listener for incoming messages
   ws.on("message", async (e) => {
-    const response = {
-      code: "500",
-      msg: "internal server error",
-      data: {},
-    };
     const data = JSON.parse(e);
     const payload = data.payload;
 
-    let game;
-
-    const updateResponse = (code, msg, data) => {
-      response.code = code;
-      response.msg = msg;
-      response.data = data;
-    };
-
     switch (data.action) {
+      // Registers a new player
       case "registerPlayer":
         game = games.find((game) => game.code === payload.code);
 
@@ -46,28 +49,28 @@ wss.on("connection", (ws) => {
           break;
         }
 
-        const player = new Player(game.players.length, payload.name, ws);
+        player = new Player(game.players.length, payload.name, ws);
 
         game.addPlayer(player);
 
         // Broadcast the new player to everyone in the game
-        for (const player of game.players) {
-          const playerNames = game.players.map((item) => item.name);
+        for (const playerInGame of game.players) {
+          const playerNames = game.getPlayerNames();
           // Response
           updateResponse(200, "A new player was created", {
-            action: data.action,
+            action: "updatePlayers",
             players: playerNames,
             code: payload.code,
           });
 
-          player.ws.send(JSON.stringify(response));
+          playerInGame.ws.send(JSON.stringify(response));
         }
         break;
+      // Register a new host
       case "registerHost":
-        // TODO PARSE PAYLOAD
-        const host = new Player(0, payload.name, ws);
+        player = new Player(0, payload.name, ws);
         const code = generateCode();
-        game = new Game(host, code, spotify);
+        game = new Game(player, code, spotify);
         games.push(game);
 
         // Response
@@ -77,10 +80,9 @@ wss.on("connection", (ws) => {
         });
 
         ws.send(JSON.stringify(response));
-
         break;
+      // Starts the game when host presses the start button
       case "startGame":
-        game = games.find((game) => game.code === payload.code);
         if (!game) {
           updateResponse(404, "Game not found", {});
           ws.send(JSON.stringify(response));
@@ -103,19 +105,17 @@ wss.on("connection", (ws) => {
           player.ws.send(JSON.stringify(response));
         }
         break;
+      // Notifies the game that a player is ready
       case "playerReady":
-        game = games.find((game) => game.code === payload.code);
-
         if (!game) {
           updateResponse(404, "Game not found", {
             action: "error",
-            code: payload.code,
           });
           ws.send(JSON.stringify(response));
           return;
         }
 
-        if (game.setReady(payload.name)) {
+        if (game.setReady(player.name)) {
           updateResponse(200, "Player ready!", {
             action: data.action,
             name: payload.name,
@@ -136,13 +136,12 @@ wss.on("connection", (ws) => {
 
         updateResponse(404, "Couldn't update the players ready state!", {
           action: "error",
-          name: payload.name,
+          name: player.name,
         });
         ws.send(JSON.stringify(response));
         break;
 
       case "appendAlbums":
-        game = findGame(payload.code);
         const existingAlbums = game.pushAlbums(payload.albums);
         existingAlbums.length === 0
           ? updateResponse(200, "All albums added!", { action: data.action })
@@ -160,13 +159,13 @@ wss.on("connection", (ws) => {
         const song = payload.song;
 
         const score = game.checkPlayerFinding(playerName, song);
-        if(score === -1) {
-          updateResponse(404, "Player not found", { action: "error", name : playerName });
+        if (score === -1) {
+          updateResponse(404, "Player not found", { action: "error", name: playerName });
           ws.send(JSON.stringify(response));
           return;
         }
 
-        updateResponse(200, "Player score updated", { action: data.action, score});
+        updateResponse(200, "Player score updated", { action: data.action, score });
         ws.send(JSON.stringify(response));
         break;
       // Async handlers
@@ -205,14 +204,14 @@ wss.on("connection", (ws) => {
             setTimeout(() => {
               if (game.currRound < game.rounds) {
                 game.nextRound();
-                updateResponse(200, "Round over!", { action : "roundOver"});
+                updateResponse(200, "Round over!", { action: "roundOver" });
                 for (const player of game.players) {
                   player.ws.send(JSON.stringify(response));
                 }
                 return
               }
               const finalStats = game.gameOver();
-              updateResponse(200, "Game over!", { action : "gameOver", finalStats });
+              updateResponse(200, "Game over!", { action: "gameOver", finalStats });
               for (const player of game.players) {
                 player.ws.send(JSON.stringify(response));
               }
@@ -252,7 +251,21 @@ wss.on("connection", (ws) => {
 
   // Event listener for client disconnection
   ws.on("close", () => {
-    console.log("A client disconnected.");
+    if(!player) {
+      return;
+    }
+
+    const newPlayerList = game.removePlayer(player);
+    if(newPlayerList.length !== 0) {
+      for(const playerInGame of game.players) {
+        updateResponse(200, "A player was removed!", {
+          action : "updatePlayers", 
+          players : game.getPlayerNames()
+        });
+
+        playerInGame.ws.send(JSON.stringify(response));
+      }
+    }
   });
 });
 
